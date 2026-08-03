@@ -1,0 +1,221 @@
+name: Publish otoriyose post
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: threads-otoriyose-publish
+  cancel-in-progress: false
+
+jobs:
+  publish-post:
+    runs-on: ubuntu-latest
+
+    env:
+      SUBMODULE_PATH: th
+      SUBMODULE_BRANCH: main
+      TH_REPOSITORY: shamaton/threads
+      TZ: Asia/Tokyo
+
+    steps:
+      - name: Checkout parent repository
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Ensure required secrets are configured
+        env:
+          TH_TOKEN: ${{ secrets.TH_REPO_PAT }}
+          R_APP_ID: ${{ secrets.R_APP_ID }}
+          R_AFF_ID: ${{ secrets.R_AFF_ID }}
+          TH_ACCESS_TOKEN: ${{ secrets.TH_ACCESS_TOKEN }}
+          TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
+          TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}
+          TH_REDIRECT_URI: ${{ secrets.TH_REDIRECT_URI }}
+        run: |
+          missing=()
+          [[ -n "$TH_TOKEN" ]] || missing+=(TH_REPO_PAT)
+          [[ -n "$R_APP_ID" ]] || missing+=(R_APP_ID)
+          [[ -n "$R_AFF_ID" ]] || missing+=(R_AFF_ID)
+          [[ -n "$TH_ACCESS_TOKEN" ]] || missing+=(TH_ACCESS_TOKEN)
+          [[ -n "$TH_CLIENT_ID" ]] || missing+=(TH_CLIENT_ID)
+          [[ -n "$TH_CLIENT_SECRET" ]] || missing+=(TH_CLIENT_SECRET)
+          [[ -n "$TH_REDIRECT_URI" ]] || missing+=(TH_REDIRECT_URI)
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Required secret is not configured: %s\n' "${missing[@]}"
+            exit 1
+          fi
+
+      - name: Configure git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Checkout latest threads branch
+        env:
+          TH_TOKEN: ${{ secrets.TH_REPO_PAT }}
+        run: |
+          git submodule sync -- "$SUBMODULE_PATH"
+          git config "submodule.${SUBMODULE_PATH}.url" "https://x-access-token:${TH_TOKEN}@github.com/${TH_REPOSITORY}.git"
+          git submodule update --init -- "$SUBMODULE_PATH"
+
+          git -C "$SUBMODULE_PATH" remote set-url origin "https://x-access-token:${TH_TOKEN}@github.com/${TH_REPOSITORY}.git"
+          git -C "$SUBMODULE_PATH" fetch origin "$SUBMODULE_BRANCH"
+          git -C "$SUBMODULE_PATH" checkout -B "$SUBMODULE_BRANCH" "origin/$SUBMODULE_BRANCH"
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ env.SUBMODULE_PATH }}/go.mod
+          cache: false
+
+      - name: Claim next publication
+        id: claim
+        run: |
+          post_file="$(go -C "$SUBMODULE_PATH" run ./accounts/otoriyose/cmd/otoriyose claim)"
+          if [[ -z "$post_file" ]]; then
+            echo "has_record=false" >> "$GITHUB_OUTPUT"
+            echo "No pending publication was found."
+            exit 0
+          fi
+          if [[ "$post_file" == *$'\n'* ]]; then
+            echo "Claim returned more than one path."
+            exit 1
+          fi
+          case "$post_file" in
+            accounts/otoriyose/data/posts/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/[0-9][0-9][0-9].json) ;;
+            *)
+              echo "Claim returned an unexpected path: $post_file"
+              exit 1
+              ;;
+          esac
+
+          echo "has_record=true" >> "$GITHUB_OUTPUT"
+          echo "post_file=$post_file" >> "$GITHUB_OUTPUT"
+
+      - name: Persist in-flight state
+        id: persist_claim
+        if: steps.claim.outputs.has_record == 'true'
+        env:
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+        run: |
+          git -C "$SUBMODULE_PATH" add -- "$POST_FILE"
+          if git -C "$SUBMODULE_PATH" diff --cached --quiet; then
+            echo "Claim did not change the post record."
+            exit 1
+          fi
+
+          git -C "$SUBMODULE_PATH" commit -m "chore(otoriyose): claim $(basename "$POST_FILE")"
+          git -C "$SUBMODULE_PATH" push origin "HEAD:$SUBMODULE_BRANCH"
+
+      - name: Publish claimed part
+        id: publish_current
+        if: steps.claim.outputs.has_record == 'true' && steps.persist_claim.outcome == 'success'
+        env:
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+          R_APP_ID: ${{ secrets.R_APP_ID }}
+          R_AFF_ID: ${{ secrets.R_AFF_ID }}
+          TH_ACCESS_TOKEN: ${{ secrets.TH_ACCESS_TOKEN }}
+          TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
+          TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}
+          TH_REDIRECT_URI: ${{ secrets.TH_REDIRECT_URI }}
+        run: |
+          go -C "$SUBMODULE_PATH" run ./accounts/otoriyose/cmd/otoriyose publish "$POST_FILE"
+
+      - name: Claim reply after root publication
+        id: claim_reply
+        if: steps.publish_current.outcome == 'success'
+        env:
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+        run: |
+          record_path="$SUBMODULE_PATH/$POST_FILE"
+          if ! jq -e '
+            .root.publication.status == "published" and
+            .reply != null and
+            .reply.publication.status == "pending"
+          ' "$record_path" > /dev/null; then
+            echo "claimed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          reply_file="$(go -C "$SUBMODULE_PATH" run ./accounts/otoriyose/cmd/otoriyose claim)"
+          if [[ "$reply_file" != "$POST_FILE" ]]; then
+            echo "Reply claim returned an unexpected path: $reply_file"
+            exit 1
+          fi
+          if ! jq -e '.reply.publication.status == "in_flight"' "$record_path" > /dev/null; then
+            echo "Reply was not moved to in_flight."
+            exit 1
+          fi
+
+          echo "claimed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Persist publication result
+        id: persist_primary_result
+        if: always() && steps.claim.outputs.has_record == 'true' && steps.persist_claim.outcome == 'success'
+        env:
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+        run: |
+          git -C "$SUBMODULE_PATH" add -- "$POST_FILE"
+          if git -C "$SUBMODULE_PATH" diff --cached --quiet; then
+            echo "No publication state changes to persist."
+            exit 0
+          fi
+
+          git -C "$SUBMODULE_PATH" commit -m "chore(otoriyose): persist publication state"
+          git -C "$SUBMODULE_PATH" push origin "HEAD:$SUBMODULE_BRANCH"
+
+      - name: Publish reply
+        id: publish_reply
+        if: steps.claim_reply.outputs.claimed == 'true' && steps.persist_primary_result.outcome == 'success'
+        env:
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+          R_APP_ID: ${{ secrets.R_APP_ID }}
+          R_AFF_ID: ${{ secrets.R_AFF_ID }}
+          TH_ACCESS_TOKEN: ${{ secrets.TH_ACCESS_TOKEN }}
+          TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
+          TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}
+          TH_REDIRECT_URI: ${{ secrets.TH_REDIRECT_URI }}
+        run: |
+          go -C "$SUBMODULE_PATH" run ./accounts/otoriyose/cmd/otoriyose publish "$POST_FILE"
+
+      - name: Persist reply result
+        id: persist_reply_result
+        if: always() && steps.claim_reply.outputs.claimed == 'true' && steps.persist_primary_result.outcome == 'success'
+        env:
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+        run: |
+          git -C "$SUBMODULE_PATH" add -- "$POST_FILE"
+          if git -C "$SUBMODULE_PATH" diff --cached --quiet; then
+            echo "No reply state changes to persist."
+            exit 0
+          fi
+
+          git -C "$SUBMODULE_PATH" commit -m "chore(otoriyose): persist reply state"
+          git -C "$SUBMODULE_PATH" push origin "HEAD:$SUBMODULE_BRANCH"
+
+      - name: Commit updated submodule pointer
+        if: always()
+        run: |
+          git -C "$SUBMODULE_PATH" fetch origin "$SUBMODULE_BRANCH"
+          local_sha="$(git -C "$SUBMODULE_PATH" rev-parse HEAD)"
+          remote_sha="$(git -C "$SUBMODULE_PATH" rev-parse "origin/$SUBMODULE_BRANCH")"
+          if [[ "$local_sha" != "$remote_sha" ]]; then
+            echo "The local threads commit was not persisted to origin/$SUBMODULE_BRANCH."
+            exit 1
+          fi
+
+          git add "$SUBMODULE_PATH"
+          if git diff --cached --quiet; then
+            echo "No parent repository changes."
+            exit 0
+          fi
+
+          git commit -m "chore: update threads submodule pointer"
+          git push origin "HEAD:main"

@@ -6,9 +6,17 @@ function dispatchCheckOsobaWorkflow() {
   dispatchGitHubWorkflow_('check-osoba.yml');
 }
 
+function dispatchGenerateOtoriyoseWorkflow() {
+  dispatchGitHubWorkflow_('generate-otoriyose.yml');
+}
+
+function dispatchPublishOtoriyoseWorkflow() {
+  dispatchGitHubWorkflow_('publish-otoriyose.yml');
+}
+
 function dispatchGitHubWorkflow_(workflowId) {
   const owner = 'shamaton';
-  const repo = 'osoba-actions';
+  const repo = 'triggers';
   const ref = 'main';
 
   const token = PropertiesService

@@ -36,12 +36,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Ensure OSOBA_REPO_PAT is configured
+      - name: Ensure TRIGGERS_REPO_PAT is configured
         env:
-          OSOBA_TOKEN: ${{ secrets.OSOBA_REPO_PAT }}
+          OSOBA_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
         run: |
           if [ -z "$OSOBA_TOKEN" ]; then
-            echo "OSOBA_REPO_PAT is not configured."
+            echo "TRIGGERS_REPO_PAT is not configured."
             exit 1
           fi
 
@@ -52,7 +52,7 @@ jobs:
 
       - name: Checkout osoba submodule with PAT
         env:
-          OSOBA_TOKEN: ${{ secrets.OSOBA_REPO_PAT }}
+          OSOBA_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
         run: |
           git submodule sync -- "$SUBMODULE_PATH"
           git config "submodule.${SUBMODULE_PATH}.url" "https://x-access-token:${OSOBA_TOKEN}@github.com/shamaton/osoba.git"

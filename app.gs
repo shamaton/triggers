@@ -7,11 +7,11 @@ function dispatchCheckOsobaWorkflow() {
 }
 
 function dispatchGenerateOtoriyoseWorkflow() {
-  dispatchGitHubWorkflow_('generate-otoriyose.yml');
+  dispatchGitHubWorkflow_('generate-oto.yml');
 }
 
 function dispatchPublishOtoriyoseWorkflow() {
-  dispatchGitHubWorkflow_('publish-otoriyose.yml');
+  dispatchGitHubWorkflow_('publish-oto.yml');
 }
 
 function dispatchGitHubWorkflow_(workflowId) {

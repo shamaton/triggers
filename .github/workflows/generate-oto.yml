@@ -38,12 +38,23 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Ensure repository token is configured
+      - name: Ensure required secrets are configured
         env:
           TH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
+          R_APP_ID: ${{ secrets.R_APP_ID }}
+          R_AFF_ID: ${{ secrets.R_AFF_ID }}
+          R_ACCESS_KEY: ${{ secrets.R_ACCESS_KEY }}
+          R_HTTP_REFERER: ${{ secrets.R_HTTP_REFERER }}
         run: |
-          if [[ -z "$TH_TOKEN" ]]; then
-            echo "TRIGGERS_REPO_PAT is not configured."
+          missing=()
+          [[ -n "$TH_TOKEN" ]] || missing+=(TRIGGERS_REPO_PAT)
+          [[ -n "$R_APP_ID" ]] || missing+=(R_APP_ID)
+          [[ -n "$R_AFF_ID" ]] || missing+=(R_AFF_ID)
+          [[ -n "$R_ACCESS_KEY" ]] || missing+=(R_ACCESS_KEY)
+          [[ -n "$R_HTTP_REFERER" ]] || missing+=(R_HTTP_REFERER)
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Required secret is not configured: %s\n' "${missing[@]}"
             exit 1
           fi
 
@@ -113,6 +124,8 @@ jobs:
         env:
           R_APP_ID: ${{ secrets.R_APP_ID }}
           R_AFF_ID: ${{ secrets.R_AFF_ID }}
+          R_ACCESS_KEY: ${{ secrets.R_ACCESS_KEY }}
+          R_HTTP_REFERER: ${{ secrets.R_HTTP_REFERER }}
           TARGET_DATE: ${{ steps.parameters.outputs.target_date }}
           POST_COUNT: ${{ steps.parameters.outputs.count }}
           BRANCH: ${{ steps.parameters.outputs.branch }}

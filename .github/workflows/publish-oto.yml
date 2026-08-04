@@ -30,16 +30,16 @@ jobs:
 
       - name: Ensure required secrets are configured
         env:
-          TH_TOKEN: ${{ secrets.TH_REPO_PAT }}
+          TH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
           R_APP_ID: ${{ secrets.R_APP_ID }}
           R_AFF_ID: ${{ secrets.R_AFF_ID }}
-          TH_ACCESS_TOKEN: ${{ secrets.TH_ACCESS_TOKEN }}
+          TH_ACCESS_TOKEN: ${{ secrets.TH_OTO_ACCESS_TOKEN }}
           TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
           TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}
           TH_REDIRECT_URI: ${{ secrets.TH_REDIRECT_URI }}
         run: |
           missing=()
-          [[ -n "$TH_TOKEN" ]] || missing+=(TH_REPO_PAT)
+          [[ -n "$TH_TOKEN" ]] || missing+=(TRIGGERS_REPO_PAT)
           [[ -n "$R_APP_ID" ]] || missing+=(R_APP_ID)
           [[ -n "$R_AFF_ID" ]] || missing+=(R_AFF_ID)
           [[ -n "$TH_ACCESS_TOKEN" ]] || missing+=(TH_ACCESS_TOKEN)
@@ -59,7 +59,7 @@ jobs:
 
       - name: Checkout latest threads branch
         env:
-          TH_TOKEN: ${{ secrets.TH_REPO_PAT }}
+          TH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
         run: |
           git submodule sync -- "$SUBMODULE_PATH"
           git config "submodule.${SUBMODULE_PATH}.url" "https://x-access-token:${TH_TOKEN}@github.com/${TH_REPOSITORY}.git"
@@ -121,7 +121,7 @@ jobs:
           POST_FILE: ${{ steps.claim.outputs.post_file }}
           R_APP_ID: ${{ secrets.R_APP_ID }}
           R_AFF_ID: ${{ secrets.R_AFF_ID }}
-          TH_ACCESS_TOKEN: ${{ secrets.TH_ACCESS_TOKEN }}
+          TH_ACCESS_TOKEN: ${{ secrets.TH_OTO_ACCESS_TOKEN }}
           TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
           TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}
           TH_REDIRECT_URI: ${{ secrets.TH_REDIRECT_URI }}
@@ -178,7 +178,7 @@ jobs:
           POST_FILE: ${{ steps.claim.outputs.post_file }}
           R_APP_ID: ${{ secrets.R_APP_ID }}
           R_AFF_ID: ${{ secrets.R_AFF_ID }}
-          TH_ACCESS_TOKEN: ${{ secrets.TH_ACCESS_TOKEN }}
+          TH_ACCESS_TOKEN: ${{ secrets.TH_OTO_ACCESS_TOKEN }}
           TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
           TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}
           TH_REDIRECT_URI: ${{ secrets.TH_REDIRECT_URI }}

@@ -40,10 +40,10 @@ jobs:
 
       - name: Ensure repository token is configured
         env:
-          TH_TOKEN: ${{ secrets.TH_REPO_PAT }}
+          TH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
         run: |
           if [[ -z "$TH_TOKEN" ]]; then
-            echo "TH_REPO_PAT is not configured."
+            echo "TRIGGERS_REPO_PAT is not configured."
             exit 1
           fi
 
@@ -54,7 +54,7 @@ jobs:
 
       - name: Checkout latest threads branch
         env:
-          TH_TOKEN: ${{ secrets.TH_REPO_PAT }}
+          TH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
         run: |
           git submodule sync -- "$SUBMODULE_PATH"
           git config "submodule.${SUBMODULE_PATH}.url" "https://x-access-token:${TH_TOKEN}@github.com/${TH_REPOSITORY}.git"
@@ -96,7 +96,7 @@ jobs:
 
       - name: Ensure no generation PR is awaiting review
         env:
-          GH_TOKEN: ${{ secrets.TH_REPO_PAT }}
+          GH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
         run: |
           open_pr_count="$(gh pr list \
             --repo "$TH_REPOSITORY" \
@@ -137,7 +137,7 @@ jobs:
 
       - name: Create review pull request
         env:
-          GH_TOKEN: ${{ secrets.TH_REPO_PAT }}
+          GH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
           TARGET_DATE: ${{ steps.parameters.outputs.target_date }}
           POST_COUNT: ${{ steps.parameters.outputs.count }}
           BRANCH: ${{ steps.parameters.outputs.branch }}

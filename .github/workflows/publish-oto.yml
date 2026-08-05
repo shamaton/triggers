@@ -138,33 +138,32 @@ jobs:
         run: |
           go -C "$SUBMODULE_PATH" run ./accounts/otoriyose/cmd/otoriyose publish "$POST_FILE"
 
-      - name: Claim reply after root publication
+      - name: Detect reply prepared by root publication
         id: claim_reply
         if: steps.publish_current.outcome == 'success'
         env:
           POST_FILE: ${{ steps.claim.outputs.post_file }}
         run: |
           record_path="$SUBMODULE_PATH/$POST_FILE"
-          if ! jq -e '
+          if jq -e '
             .root.publication.status == "published" and
             .reply != null and
-            .reply.publication.status == "pending"
+            .reply.publication.status == "in_flight"
+          ' "$record_path" > /dev/null; then
+            echo "claimed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if jq -e '
+            .reply == null or
+            .reply.publication.status == "published"
           ' "$record_path" > /dev/null; then
             echo "claimed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          reply_file="$(go -C "$SUBMODULE_PATH" run ./accounts/otoriyose/cmd/otoriyose claim)"
-          if [[ "$reply_file" != "$POST_FILE" ]]; then
-            echo "Reply claim returned an unexpected path: $reply_file"
-            exit 1
-          fi
-          if ! jq -e '.reply.publication.status == "in_flight"' "$record_path" > /dev/null; then
-            echo "Reply was not moved to in_flight."
-            exit 1
-          fi
-
-          echo "claimed=true" >> "$GITHUB_OUTPUT"
+          echo "Publication succeeded but left an unexpected reply state."
+          exit 1
 
       - name: Persist publication result
         id: persist_primary_result

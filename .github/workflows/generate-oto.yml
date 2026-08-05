@@ -29,6 +29,7 @@ jobs:
       SUBMODULE_PATH: th
       SUBMODULE_BRANCH: main
       TH_REPOSITORY: shamaton/threads
+      GOPRIVATE: github.com/shamaton/*
       TZ: Asia/Tokyo
 
     steps:
@@ -59,9 +60,12 @@ jobs:
           fi
 
       - name: Configure git
+        env:
+          TH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global url."https://x-access-token:${TH_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Checkout latest threads branch
         env:

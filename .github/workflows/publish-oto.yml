@@ -34,6 +34,8 @@ jobs:
           TH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
           R_APP_ID: ${{ secrets.R_APP_ID }}
           R_AFF_ID: ${{ secrets.R_AFF_ID }}
+          R_ACCESS_KEY: ${{ secrets.R_ACCESS_KEY }}
+          R_HTTP_REFERER: ${{ secrets.R_HTTP_REFERER }}
           TH_ACCESS_TOKEN: ${{ secrets.TH_OTO_ACCESS_TOKEN }}
           TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
           TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}
@@ -43,6 +45,8 @@ jobs:
           [[ -n "$TH_TOKEN" ]] || missing+=(TRIGGERS_REPO_PAT)
           [[ -n "$R_APP_ID" ]] || missing+=(R_APP_ID)
           [[ -n "$R_AFF_ID" ]] || missing+=(R_AFF_ID)
+          [[ -n "$R_ACCESS_KEY" ]] || missing+=(R_ACCESS_KEY)
+          [[ -n "$R_HTTP_REFERER" ]] || missing+=(R_HTTP_REFERER)
           [[ -n "$TH_ACCESS_TOKEN" ]] || missing+=(TH_ACCESS_TOKEN)
           [[ -n "$TH_CLIENT_ID" ]] || missing+=(TH_CLIENT_ID)
           [[ -n "$TH_CLIENT_SECRET" ]] || missing+=(TH_CLIENT_SECRET)
@@ -125,6 +129,8 @@ jobs:
           POST_FILE: ${{ steps.claim.outputs.post_file }}
           R_APP_ID: ${{ secrets.R_APP_ID }}
           R_AFF_ID: ${{ secrets.R_AFF_ID }}
+          R_ACCESS_KEY: ${{ secrets.R_ACCESS_KEY }}
+          R_HTTP_REFERER: ${{ secrets.R_HTTP_REFERER }}
           TH_ACCESS_TOKEN: ${{ secrets.TH_OTO_ACCESS_TOKEN }}
           TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
           TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}
@@ -182,6 +188,8 @@ jobs:
           POST_FILE: ${{ steps.claim.outputs.post_file }}
           R_APP_ID: ${{ secrets.R_APP_ID }}
           R_AFF_ID: ${{ secrets.R_AFF_ID }}
+          R_ACCESS_KEY: ${{ secrets.R_ACCESS_KEY }}
+          R_HTTP_REFERER: ${{ secrets.R_HTTP_REFERER }}
           TH_ACCESS_TOKEN: ${{ secrets.TH_OTO_ACCESS_TOKEN }}
           TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
           TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}

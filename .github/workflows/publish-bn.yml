@@ -1,0 +1,270 @@
+name: "Publish bodynotes post"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: threads-bodynotes-publish
+  cancel-in-progress: false
+
+jobs:
+  publish-post:
+    runs-on: ubuntu-latest
+
+    env:
+      SUBMODULE_PATH: th
+      SUBMODULE_BRANCH: main
+      TH_REPOSITORY: shamaton/threads
+      GOPRIVATE: github.com/shamaton/*
+      TZ: Asia/Tokyo
+
+    steps:
+      - name: Checkout parent repository
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Ensure required secrets are configured
+        env:
+          TH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
+          TH_ACCESS_TOKEN: ${{ secrets.TH_BN_ACCESS_TOKEN }}
+          TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
+          TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}
+          TH_REDIRECT_URI: ${{ secrets.TH_REDIRECT_URI }}
+        run: |
+          missing=()
+          [[ -n "$TH_TOKEN" ]] || missing+=(TRIGGERS_REPO_PAT)
+          [[ -n "$TH_ACCESS_TOKEN" ]] || missing+=(TH_BN_ACCESS_TOKEN)
+          [[ -n "$TH_CLIENT_ID" ]] || missing+=(TH_CLIENT_ID)
+          [[ -n "$TH_CLIENT_SECRET" ]] || missing+=(TH_CLIENT_SECRET)
+          [[ -n "$TH_REDIRECT_URI" ]] || missing+=(TH_REDIRECT_URI)
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Required secret is not configured: %s\n' "${missing[@]}"
+            exit 1
+          fi
+
+      - name: Configure git
+        env:
+          TH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global url."https://x-access-token:${TH_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+      - name: Checkout latest threads branch
+        env:
+          TH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
+        run: |
+          git submodule sync -- "$SUBMODULE_PATH"
+          git config "submodule.${SUBMODULE_PATH}.url" "https://x-access-token:${TH_TOKEN}@github.com/${TH_REPOSITORY}.git"
+          git submodule update --init -- "$SUBMODULE_PATH"
+
+          git -C "$SUBMODULE_PATH" remote set-url origin "https://x-access-token:${TH_TOKEN}@github.com/${TH_REPOSITORY}.git"
+          git -C "$SUBMODULE_PATH" fetch origin "$SUBMODULE_BRANCH"
+          git -C "$SUBMODULE_PATH" checkout -B "$SUBMODULE_BRANCH" "origin/$SUBMODULE_BRANCH"
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ env.SUBMODULE_PATH }}/go.mod
+          cache: false
+
+      - name: Validate bodynotes records
+        run: go -C "$SUBMODULE_PATH" run ./accounts/bodynotes/cmd/bodynotes validate
+
+      - name: Claim next publication
+        id: claim
+        run: |
+          post_file="$(go -C "$SUBMODULE_PATH" run ./accounts/bodynotes/cmd/bodynotes claim)"
+          if [[ -z "$post_file" ]]; then
+            echo "has_record=false" >> "$GITHUB_OUTPUT"
+            echo "No pending publication was found."
+            exit 0
+          fi
+          if [[ "$post_file" == *$'\n'* ]]; then
+            echo "Claim returned more than one path."
+            exit 1
+          fi
+          case "$post_file" in
+            accounts/bodynotes/data/posts/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/[0-9][0-9][0-9].json) ;;
+            *)
+              echo "Claim returned an unexpected path: $post_file"
+              exit 1
+              ;;
+          esac
+
+          echo "has_record=true" >> "$GITHUB_OUTPUT"
+          echo "post_file=$post_file" >> "$GITHUB_OUTPUT"
+
+      - name: Persist in-flight state
+        id: persist_claim
+        if: steps.claim.outputs.has_record == 'true'
+        env:
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+        run: |
+          git -C "$SUBMODULE_PATH" add -- "$POST_FILE"
+          if git -C "$SUBMODULE_PATH" diff --cached --quiet; then
+            echo "Claim did not change the post record."
+            exit 1
+          fi
+
+          git -C "$SUBMODULE_PATH" commit -m "chore(bodynotes): claim $(basename "$POST_FILE")"
+          git -C "$SUBMODULE_PATH" push origin "HEAD:$SUBMODULE_BRANCH"
+
+      - name: Publish claimed post
+        id: publish_current
+        if: steps.claim.outputs.has_record == 'true' && steps.persist_claim.outcome == 'success'
+        env:
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+          TH_ACCESS_TOKEN: ${{ secrets.TH_BN_ACCESS_TOKEN }}
+          TH_CLIENT_ID: ${{ secrets.TH_CLIENT_ID }}
+          TH_CLIENT_SECRET: ${{ secrets.TH_CLIENT_SECRET }}
+          TH_REDIRECT_URI: ${{ secrets.TH_REDIRECT_URI }}
+        run: go -C "$SUBMODULE_PATH" run ./accounts/bodynotes/cmd/bodynotes publish "$POST_FILE"
+
+      - name: Persist publication result
+        id: persist_result
+        if: always() && steps.claim.outputs.has_record == 'true' && steps.persist_claim.outcome == 'success'
+        env:
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+        run: |
+          git -C "$SUBMODULE_PATH" add -- "$POST_FILE"
+          if git -C "$SUBMODULE_PATH" diff --cached --quiet; then
+            echo "No publication state changes to persist."
+            exit 0
+          fi
+
+          git -C "$SUBMODULE_PATH" commit -m "chore(bodynotes): persist publication state"
+          git -C "$SUBMODULE_PATH" push origin "HEAD:$SUBMODULE_BRANCH"
+
+      - name: Commit updated submodule pointer
+        if: always()
+        run: |
+          git -C "$SUBMODULE_PATH" fetch origin "$SUBMODULE_BRANCH"
+          local_sha="$(git -C "$SUBMODULE_PATH" rev-parse HEAD)"
+          remote_sha="$(git -C "$SUBMODULE_PATH" rev-parse "origin/$SUBMODULE_BRANCH")"
+          if [[ "$local_sha" != "$remote_sha" ]]; then
+            echo "The local threads commit was not persisted to origin/$SUBMODULE_BRANCH."
+            exit 1
+          fi
+
+          git add "$SUBMODULE_PATH"
+          if git diff --cached --quiet; then
+            echo "No parent repository changes."
+            exit 0
+          fi
+
+          git commit -m "chore: update threads submodule pointer"
+          git push origin "HEAD:main"
+
+      - name: Create pending-resolution draft pull request
+        id: recovery_pr
+        if: >-
+          failure() &&
+          steps.claim.outputs.has_record == 'true' &&
+          steps.publish_current.outcome == 'failure' &&
+          steps.persist_result.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+        run: |
+          record_path="$SUBMODULE_PATH/$POST_FILE"
+          status="$(jq -r '.root.publication.status' "$record_path")"
+          if [[ "$status" != "unknown" ]]; then
+            echo "The failed publication did not leave an unknown state. No recovery PR is needed."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git -C "$SUBMODULE_PATH" fetch origin "$SUBMODULE_BRANCH"
+          local_sha="$(git -C "$SUBMODULE_PATH" rev-parse HEAD)"
+          remote_sha="$(git -C "$SUBMODULE_PATH" rev-parse "origin/$SUBMODULE_BRANCH")"
+          if [[ "$local_sha" != "$remote_sha" ]]; then
+            echo "The unknown state was not persisted to origin/$SUBMODULE_BRANCH. Skipping recovery PR creation."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          branch="automation/bodynotes-retry-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git -C "$SUBMODULE_PATH" switch -c "$branch"
+          resolution="$(go -C "$SUBMODULE_PATH" run ./accounts/bodynotes/cmd/bodynotes resolve-pending "$POST_FILE")"
+          if [[ "$resolution" != "$POST_FILE pending" ]]; then
+            echo "Unexpected pending resolution result: $resolution"
+            exit 1
+          fi
+
+          git -C "$SUBMODULE_PATH" add -- "$POST_FILE"
+          if git -C "$SUBMODULE_PATH" diff --cached --quiet; then
+            echo "Resolving the unknown publication did not change the post record."
+            exit 1
+          fi
+          git -C "$SUBMODULE_PATH" commit -m "fix(bodynotes): return publication to pending"
+          git -C "$SUBMODULE_PATH" push origin "HEAD:refs/heads/$branch"
+
+          body_file="$RUNNER_TEMP/bodynotes-recovery-pr-body.md"
+          cat > "$body_file" <<EOF
+          ## Summary
+
+          - Return the publication in ${POST_FILE} from unknown to pending
+          - Preserve the last attempt time and safe error summary for audit history
+
+          ## Required manual verification
+
+          The Threads API request may have succeeded even though the workflow reported an error.
+
+          Before making this PR ready for review or merging it, confirm on the bodynotes Threads account that the post was not published. Do not merge this PR if the post exists. Merging makes this publication eligible for another attempt and can create a duplicate post.
+
+          Source workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          EOF
+
+          pr_url="$(gh pr create \
+            --repo "$TH_REPOSITORY" \
+            --base "$SUBMODULE_BRANCH" \
+            --head "$branch" \
+            --draft \
+            --title "fix(bodynotes): retry publication" \
+            --body-file "$body_file")"
+          echo "created=true" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Slack failure notification
+        id: slack_notification
+        if: failure()
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+          RECOVERY_PR_URL: ${{ steps.recovery_pr.outputs.pr_url }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "SLACK_BOT_TOKEN or SLACK_CHANNEL_ID is not configured. Skipping Slack notification."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          post_file="${POST_FILE:-unavailable}"
+          recovery_pr_url="${RECOVERY_PR_URL:-not-created}"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "post_file=$post_file" >> "$GITHUB_OUTPUT"
+          echo "recovery_pr_url=$recovery_pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Slack
+        if: failure() && steps.slack_notification.outputs.enabled == 'true'
+        uses: slackapi/slack-github-action@v3.0.3
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            text: |
+              <!channel> :x: bodynotes publish workflow failed
+              status: failure
+              post_file: ${{ steps.slack_notification.outputs.post_file }}
+              recovery_pr: ${{ steps.slack_notification.outputs.recovery_pr_url }}
+              run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

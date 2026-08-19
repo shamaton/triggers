@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: threads-bodynotes-publish
+  group: threads-publication-write
   cancel-in-progress: false
 
 jobs:
@@ -133,15 +133,43 @@ jobs:
         if: always() && steps.claim.outputs.has_record == 'true' && steps.persist_claim.outcome == 'success'
         env:
           POST_FILE: ${{ steps.claim.outputs.post_file }}
-        run: |
-          git -C "$SUBMODULE_PATH" add -- "$POST_FILE"
-          if git -C "$SUBMODULE_PATH" diff --cached --quiet; then
-            echo "No publication state changes to persist."
-            exit 0
-          fi
+          COMMIT_MESSAGE: "chore(bodynotes): persist publication state"
+          RECOVERY_PREFIX: bodynotes-result
+        run: bash .github/scripts/persist-threads-result.sh
 
-          git -C "$SUBMODULE_PATH" commit -m "chore(bodynotes): persist publication state"
-          git -C "$SUBMODULE_PATH" push origin "HEAD:$SUBMODULE_BRANCH"
+      - name: Create publication-state recovery draft pull request
+        id: state_recovery_pr
+        if: >-
+          always() &&
+          steps.persist_result.outcome == 'failure' &&
+          steps.persist_result.outputs.recovery_branch != ''
+        env:
+          GH_TOKEN: ${{ secrets.TRIGGERS_REPO_PAT }}
+          POST_FILE: ${{ steps.claim.outputs.post_file }}
+          RECOVERY_BRANCH: ${{ steps.persist_result.outputs.recovery_branch }}
+        run: |
+          body_file="$RUNNER_TEMP/bodynotes-state-recovery-pr-body.md"
+          cat > "$body_file" <<EOF
+          ## Summary
+
+          - Preserve the publication result for ${POST_FILE} after a push conflict
+          - Keep the post non-retryable until the recorded state is reviewed and merged
+
+          ## Required manual verification
+
+          Review the Threads account and the publication state in this branch before merging. Do not return the record to pending unless the post is confirmed absent.
+
+          Source workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          EOF
+
+          pr_url="$(gh pr create \
+            --repo "$TH_REPOSITORY" \
+            --base "$SUBMODULE_BRANCH" \
+            --head "$RECOVERY_BRANCH" \
+            --draft \
+            --title "fix(bodynotes): recover publication state" \
+            --body-file "$body_file")"
+          echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
 
       - name: Commit updated submodule pointer
         if: always()
@@ -161,7 +189,21 @@ jobs:
           fi
 
           git commit -m "chore: update threads submodule pointer"
-          git push origin "HEAD:main"
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:main"; then
+              exit 0
+            fi
+            echo "Submodule pointer push attempt ${attempt} failed. Refreshing main."
+            if ! git fetch origin main; then
+              continue
+            fi
+            if ! git rebase origin/main; then
+              git rebase --abort || true
+              exit 1
+            fi
+          done
+          echo "Could not persist the submodule pointer after three attempts."
+          exit 1
 
       - name: Create pending-resolution draft pull request
         id: recovery_pr
@@ -176,8 +218,8 @@ jobs:
         run: |
           record_path="$SUBMODULE_PATH/$POST_FILE"
           status="$(jq -r '.root.publication.status' "$record_path")"
-          if [[ "$status" != "unknown" ]]; then
-            echo "The failed publication did not leave an unknown state. No recovery PR is needed."
+          if [[ "$status" != "unknown" && "$status" != "in_flight" ]]; then
+            echo "The failed publication did not leave an unresolved state. No recovery PR is needed."
             echo "created=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -186,7 +228,7 @@ jobs:
           local_sha="$(git -C "$SUBMODULE_PATH" rev-parse HEAD)"
           remote_sha="$(git -C "$SUBMODULE_PATH" rev-parse "origin/$SUBMODULE_BRANCH")"
           if [[ "$local_sha" != "$remote_sha" ]]; then
-            echo "The unknown state was not persisted to origin/$SUBMODULE_BRANCH. Skipping recovery PR creation."
+            echo "The unresolved state was not persisted to origin/$SUBMODULE_BRANCH. Skipping recovery PR creation."
             echo "created=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -211,7 +253,7 @@ jobs:
           cat > "$body_file" <<EOF
           ## Summary
 
-          - Return the publication in ${POST_FILE} from unknown to pending
+          - Return the unresolved publication in ${POST_FILE} to pending
           - Preserve the last attempt time and safe error summary for audit history
 
           ## Required manual verification
@@ -241,6 +283,7 @@ jobs:
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
           POST_FILE: ${{ steps.claim.outputs.post_file }}
           RECOVERY_PR_URL: ${{ steps.recovery_pr.outputs.pr_url }}
+          STATE_RECOVERY_PR_URL: ${{ steps.state_recovery_pr.outputs.pr_url }}
         run: |
           if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$SLACK_CHANNEL_ID" ]; then
             echo "SLACK_BOT_TOKEN or SLACK_CHANNEL_ID is not configured. Skipping Slack notification."
@@ -249,7 +292,7 @@ jobs:
           fi
 
           post_file="${POST_FILE:-unavailable}"
-          recovery_pr_url="${RECOVERY_PR_URL:-not-created}"
+          recovery_pr_url="${STATE_RECOVERY_PR_URL:-${RECOVERY_PR_URL:-not-created}}"
           echo "enabled=true" >> "$GITHUB_OUTPUT"
           echo "post_file=$post_file" >> "$GITHUB_OUTPUT"
           echo "recovery_pr_url=$recovery_pr_url" >> "$GITHUB_OUTPUT"
